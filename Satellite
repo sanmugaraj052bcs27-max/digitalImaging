@@ -1,0 +1,93 @@
+clc; clear; close all;
+
+% ---------- 1. INPUT & SETUP ----------
+dataFolder = 'C:\Users\admin\Desktop\archive(3)\valid1';  
+outFolder  = fullfile(dataFolder, 'final_results_kmeans');
+
+if ~exist(outFolder, 'dir')
+    mkdir(outFolder);
+end
+
+% List all .jpg images
+files = dir(fullfile(dataFolder, '*.jpg'));
+fprintf('Found %d image(s) in %s\n', numel(files), dataFolder);
+
+% ---------- 2. PROCESS EACH IMAGE ----------
+for k = 1:numel(files)
+    fname = fullfile(dataFolder, files(k).name);
+    fprintf('\nProcessing %d/%d: %s\n', k, numel(files), files(k).name);
+
+    % --- Read image ---
+    I = imread(fname);
+    if ndims(I) == 3
+        Igray = rgb2gray(I);
+    else
+        Igray = I;
+    end
+
+    % ---------- 3. PREPROCESSING ----------
+    Ienh = adapthisteq(Igray);                 % Enhance contrast
+    Ifilt = medfilt2(Ienh, [5 5]);             % Larger median filter
+
+    % Morphological opening to clean noise
+    se = strel('disk', 2);
+    Ifilt = imopen(Ifilt, se);
+
+    % ---------- 4. EDGE DETECTION ----------
+    edges = edge(Ifilt, 'Canny');
+
+    % ---------- 5. K-MEANS SEGMENTATION ----------
+    imgVec = double(Ifilt(:));                % Convert to vector
+    nClusters = 3;                             % Number of clusters (change if needed)
+    [clusterIdx, clusterCenters] = kmeans(imgVec, nClusters, 'Replicates', 3);
+
+    segmentedImg = reshape(clusterIdx, size(Ifilt)); % Reshape to image size
+    Lrgb = label2rgb(segmentedImg);                 % Color map
+    %-------------------watershed------------------------
+    hy = fspecial('sobel');
+    hx = hy';
+    Iy = imfilter(double(Ifilt), hy, 'replicate');
+    Ix = imfilter(double(Ifilt), hx, 'replicate');
+    gradmag = sqrt(Ix.^2 + Iy.^2);
+
+    L = watershed(gradmag);
+    Lrgb1 = label2rgb(L, 'jet', 'k', 'shuffle');
+    
+    %-----------------------FCM----------------------
+     imgVec = double(Ifilt(:));        % Convert image to a vector
+    nClusters = 3;                    % Choose number of clusters (2 or 3 usually best)
+    
+    % Apply fuzzy c-means clustering
+    [center, U, obj_fcn] = fcm(imgVec, nClusters);
+
+    % Assign each pixel to the cluster with the highest membership
+    [~, clusterIdx] = max(U);         
+    segmentedImg = reshape(clusterIdx, size(Ifilt));  % Back to image form
+    
+    % Convert to RGB for visualization
+    Lrgb2 = label2rgb(segmentedImg);
+
+    % ---------- 6. DISPLAY EACH IMAGE IN ITS OWN FIGURE ----------
+    figure('Name', sprintf('Image %d: %s', k, files(k).name), ...
+           'NumberTitle','off', 'Position', [100 100 1400 400]);
+
+    subplot(1,5,1); imshow(Igray); title('Original Image');
+    subplot(1,5,2); imshow(Ienh); title('Enhanced (CLAHE)');
+    subplot(1,5,3); imshow(Ifilt); title('Median Filtered + Opening');
+    subplot(1,5,4); imshow(edges); title('Canny Edges');
+    subplot(1,5,5); imshow(Lrgb); title('K-means Segmentation');
+    subplot(2,5,1);imshow(Lrgb1);title('watershed');
+    subplot(2,5,2);imshow(Lrgb2);title('FCM');
+    
+
+    drawnow;
+
+    % ---------- 7. SAVE RESULTS ----------
+    [~, base, ext] = fileparts(files(k).name);
+    imwrite(Lrgb, fullfile(outFolder, [base '_kmeans' ext]));
+
+    % Save figure for this image
+    saveas(gcf, fullfile(outFolder, [base '_kmeans_results.png']));
+end
+
+disp('? All images processed successfully with K-means segmentation');
